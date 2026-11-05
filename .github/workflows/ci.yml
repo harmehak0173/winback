@@ -1,0 +1,67 @@
+name: CI
+
+# Every gate the release depends on, on every push and pull request. No
+# secrets are used or needed: the app is offline-first, the end-to-end build
+# has no backend keys (scripts/e2e-build.mjs fails if any are inlined), and
+# the database tests run in PGlite, never against the real project.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: one database test replays the live project's path
+          # from the 2026-09-27 launch commit.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Types
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test -- --ci
+
+      - name: Copy rules and the reminder engine
+        run: npm run check:copy -- --all-docs
+
+      - name: Database tests (PGlite)
+        run: npm run test:sql
+
+      - name: End-to-end build (no backend keys)
+        run: npm run e2e:build
+
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: End-to-end tests
+        run: npx playwright test
+
+      - name: Keep the Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 14
